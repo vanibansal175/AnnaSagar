@@ -48,54 +48,55 @@
 
 ## Phase 2 — Backend Foundation
 
-### Milestone 4 — Initialize App and Structure ⬜ NOT STARTED
+### Milestone 4 — Initialize App and Structure 🟡 IN PROGRESS (Server Done)
 
 > Depends on: Milestone 3
 
 - [ ] Initialize /client: npx create-next-app@latest with TypeScript, Tailwind, App Router
-- [ ] Initialize /server: npm init, install Express, TypeScript, ts-node, nodemon
-- [ ] Configure tsconfig.json (strict: true) for both
+- [x] Initialize /server: Express, TypeScript, tsx, vitest (strict mode)
+- [x] Configure tsconfig.json (strict: true) for server
 - [ ] Install and configure shadcn/ui in client
 - [ ] Set up Framer Motion in client
-- [ ] Set up server folder structure per ARCHITECTURE.md
-- [ ] Configure ESLint and Prettier for both
-- [ ] Add .env.example files for client and server (names only, no values)
-- [ ] Verify git status is clean after scaffold
+- [x] Set up server folder structure per ARCHITECTURE.md
+- [x] Configure ESLint for server
+- [x] Add server/.env.example (names only, no values, default port 5001)
+- [ ] Verify git status is clean after full scaffold
 - [ ] Commit: "chore: initialize monorepo scaffold"
 
 ---
 
-### Milestone 5 — Database, Schemas, Validation, Indexes ⬜ NOT STARTED
+### Milestone 5 — Database, Schemas, Validation, Indexes 🟡 IN PROGRESS (Foundation Done)
 
 > Depends on: Milestone 4
 
-- [ ] Install Mongoose; configure DB connection with retry logic
-- [ ] Implement User model with all fields per ARCHITECTURE.md
-- [ ] Implement Listing model with all fields (address subdocument, claim subdocument, claimHistory array)
-- [ ] Implement Notification model
-- [ ] Implement AuditLog model
-- [ ] Add all indexes per ARCHITECTURE.md
-- [ ] Implement Zod schemas for all request bodies (register, login, createListing, claim)
-- [ ] Validate D6 env var invariants on server startup (MIN < MAX_LISTING_DURATION, WARNING < MIN_LISTING_DURATION, MAX_FOOD_AGE > MAX_LISTING_DURATION)
-- [ ] Write unit tests for Zod validators
+- [x] Install Mongoose; configure DB connection with maxPoolSize 10 and graceful shutdown
+- [x] Implement User model with all fields per ARCHITECTURE.md (tokenVersion, isBlocked, role, donorType)
+- [x] Implement Listing model with all fields (address subdocument, claim subdocument, claimHistory array, cityKey, images [{url, publicId}], isRemoved)
+- [x] Implement Notification model with indexes
+- [x] Implement AuditLog model with indexes
+- [x] Add all indexes per ARCHITECTURE.md
+- [x] Implement Zod schemas for auth request bodies (register, login, changePassword, updateProfile)
+- [ ] Implement Zod schemas for listing request bodies (createListing, claim)
+- [x] Validate D6 env var invariants on server startup (MIN < MAX_LISTING_DURATION, WARNING < MIN_LISTING_DURATION, MAX_FOOD_AGE > MAX_LISTING_DURATION)
+- [x] Write unit tests for time rules, boundaries, and status transitions
 - [ ] Commit: "feat: add database models, schemas and indexes"
 
 ---
 
-### Milestone 6 — Authentication, Authorization, User Management ⬜ NOT STARTED
+### Milestone 6 — Authentication, Authorization, User Management 🟡 IN PROGRESS (Core Done)
 
 > Depends on: Milestone 5
 
-- [ ] Implement POST /api/auth/register (bcrypt hash, min rounds 12)
-- [ ] Implement POST /api/auth/login (JWT, httpOnly cookie)
-- [ ] Implement GET /api/auth/me
-- [ ] Implement verifyToken middleware
-- [ ] Implement checkRole middleware
-- [ ] Implement checkNotBlocked middleware (lazy: DB check per request)
-- [ ] Implement GET/PATCH /api/users/me/profile (donorType update only)
-- [ ] Write seed script for admin (reads ADMIN_EMAIL, ADMIN_PASSWORD from env)
-- [ ] Write integration tests for auth endpoints
-- [ ] Test: register, login, JWT expiry, blocked user rejection, role enforcement
+- [x] Implement POST /api/auth/register (bcryptjs hash, min rounds 12, role forced to user)
+- [x] Implement POST /api/auth/login (JWT Bearer token, 24h, tokenVersion embedded)
+- [x] Implement GET /api/auth/me (returns safe user without passwordHash or tokenVersion)
+- [x] Implement POST /api/auth/change-password (increments tokenVersion to invalidate active tokens)
+- [x] Implement verifyToken middleware (validates JWT, loads user, rejects mismatched tokenVersion)
+- [x] Implement checkRole middleware (enforces admin vs user)
+- [x] Implement checkNotBlocked middleware (lazy DB check on every protected request)
+- [x] Implement PATCH /api/users/me (updates name and donorType)
+- [x] Write seed script for admin (reads ADMIN_EMAIL, ADMIN_PASSWORD from env, idempotent, refuses weak passwords)
+- [x] Write integration tests for auth endpoints (duplicate email, unknown email/wrong password same message, tampered token, old tokenVersion, blocked user 403, admin route 403)
 - [ ] Commit: "feat: implement auth and user management"
 
 ---
