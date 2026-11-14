@@ -39,7 +39,7 @@ Before claiming, a receiver sees only the food details and approximate location 
 
 ### Claim atomicity
 
-The claim operation uses a single `findOneAndUpdate({ _id, status: 'AVAILABLE' })` call. If the listing is no longer AVAILABLE at the moment of the update, the operation returns null and the claim is rejected, preventing race conditions.
+The claim operation uses a single `findOneAndUpdate({ _id, status: 'AVAILABLE', isRemoved: false, pickupDeadline: { $gt: now }, donor: { $ne: claimerId } })` call. If any guard condition fails (listing not AVAILABLE, already removed, deadline passed, or requester is the donor), the operation returns null and the claim is rejected, preventing race conditions and enforcing all business rules atomically.
 
 ---
 
@@ -102,6 +102,12 @@ Admin accounts are never created through the public signup flow. The first (and 
 
 **D4 — Google OAuth**
 Google login is **not** included in the MVP. However, the authentication architecture must be designed so that Google OAuth (and potentially other OAuth providers) can be added in a future iteration without restructuring the auth layer.
+
+**D4b — Authentication transport**
+JWTs are sent exclusively in the `Authorization: Bearer <token>` header. No cookie-based JWT storage is used. The frontend (Vercel) and backend (Render) are on different origins, making cross-origin cookies impractical. The token is stored in memory or `sessionStorage` on the client. XSS risk is mitigated by a strict CSP header on all Vercel responses and strict output escaping. `JWT_EXPIRES_IN=24h`.
+
+**D4c — Token invalidation**
+`User.tokenVersion` is incremented on every password change. The `verifyToken` middleware compares the token's `tokenVersion` to the current database value; a mismatch (stale token) results in a `401` response.
 
 **D5 — Address and contact privacy**
 Before claiming, a receiver sees: food name, images, servings, category, cooked-at timestamp, pickup deadline countdown, donor's display name, and the approximate address (street/area, city, state, PIN). The precise address (house/building number, landmark) and the donor's contact note are revealed **only after a successful claim**. Admin and the donor always see the full address.

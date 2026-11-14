@@ -171,16 +171,10 @@ Every backend endpoint **must** return one of these two shapes. No exceptions.
 
 ## 5. Security Rules
 
-- **bcrypt minimum cost factor: 12.** Never lower this. If the hash function changes, document the migration path before merging.
-- **JWT must be stored in an `httpOnly` cookie** (preferred). If `Authorization` header is used as an alternative, document why in the PR. Never store JWT in `localStorage` or non-httpOnly cookies.
-- **CORS**: lock `origin` to the `CLIENT_URL` environment variable. Never use `origin: '*'` in production.
-
-  ```ts
-  app.use(cors({
-    origin: process.env.CLIENT_URL,
-    credentials: true,
-  }));
-  ```
+- **bcryptjs minimum cost factor: 12.** Use `bcryptjs` (pure-JS), not `bcrypt` (native C++ bindings). `bcryptjs` works on Render's free-tier Linux container without build toolchain dependencies. Never lower the cost factor below 12.
+- **JWT sent exclusively in `Authorization: Bearer <token>` header.** Never store JWT in `localStorage`, `sessionStorage` with long TTL, or any cookie. The client stores the token in memory or `sessionStorage` (cleared on tab close). This is a deliberate trade-off given the cross-origin Vercel/Render deployment (see ARCHITECTURE.md §7 for XSS mitigations).
+- **Content Security Policy (CSP):** All Vercel responses must include a strict CSP (`default-src 'self'; script-src 'self'`). Never use `dangerouslySetInnerHTML` with untrusted content.
+- **CORS**: lock `origin` to the `CLIENT_URL` environment variable on both the Express `cors()` middleware and the Socket.io `cors` option. Never use `origin: '*'` in production.
 
 - **Never return `passwordHash`** from any endpoint. All Mongoose user queries must call `.select('-passwordHash')`. Add this as a Mongoose schema plugin or enforce it in the User model's default projection.
 - **Validate before trusting.** Run Zod validation middleware **before** the controller. The controller may assume `req.body` is valid.
@@ -195,8 +189,8 @@ Every backend endpoint **must** return one of these two shapes. No exceptions.
 
 ## 6. Database Rules
 
-- **No hard-deletes by users.** Listings are soft-deleted by setting `isDeleted: true` and storing a reason (admin-only, via AuditLog). User-facing delete actions are not permitted.
-- **Atomic claim.** Claiming a listing must use a single `findOneAndUpdate({ _id, status: 'AVAILABLE' }, { $set: { status: 'CLAIMED', ... } }, { new: true })`. Never read-then-write for status transitions.
+- **No hard-deletes by users.** Listings are soft-deleted by setting `isRemoved: true` and storing a reason (admin-only, via AuditLog). There is no `DELETE` route for listings. User-facing delete actions are not permitted.
+- **Atomic claim.** Claiming a listing must use a single `findOneAndUpdate({ _id, status: 'AVAILABLE', isRemoved: false, pickupDeadline: { $gt: now }, donor: { $ne: claimerId } }, { $set: { status: 'CLAIMED', ... } }, { new: true })`. Never read-then-write for status transitions.
 - **`select('-passwordHash')` on every user query.** Add this to the Mongoose schema's default projection:
 
   ```ts
@@ -214,9 +208,10 @@ Every backend endpoint **must** return one of these two shapes. No exceptions.
 - **Compound indexes** must match those defined in `ARCHITECTURE.md`. Never add or remove indexes without updating `ARCHITECTURE.md` and justifying the change in the PR description.
 - **Never store derived state** (e.g., `WARNING` status). `WARNING` is computed at read time: `status === 'AVAILABLE' && pickupDeadline - now <= WARNING_MINUTES * 60_000`.
 - **Expiry** is a three-layer process:
-  1. Lazy: on every read of a listing, check and correct expired status.
-  2. `node-cron` periodic sweep: marks all `AVAILABLE` listings past their `pickupDeadline` as `EXPIRED`.
-  3. Startup catch-up: on server boot, run the sweep immediately to handle listings that expired during downtime.
+  1. Feed query hard-filter: every `GET /api/listings` includes `pickupDeadline: { $gt: now }` — expired listings never appear even if status has not been flipped.
+  2. Lazy: on every read of a single listing (`GET /api/listings/:id`), check and correct expired status.
+  3. `node-cron` periodic sweep (every 5 min): marks all `AVAILABLE`/`CLAIMED` listings past their `pickupDeadline` as `EXPIRED`; uses `warningNotifiedAt`/`expiredNotifiedAt` guards to send each notification exactly once.
+  4. Startup catch-up: on server boot, run the sweep immediately to handle listings that expired during downtime.
 - Mongoose schema changes (adding/removing fields) must be accompanied by a migration plan documented in the PR. Do not assume old documents will have new fields; use optional fields and default values defensively.
 - Do not use `save()` on a document retrieved with `lean()`. Lean documents are plain objects, not Mongoose documents.
 
@@ -348,7 +343,7 @@ const envSchema = z.object({
   NODE_ENV:                          z.enum(['development', 'production', 'test']),
   MONGODB_URI:                       z.string().url(),
   JWT_SECRET:                        z.string().min(32),
-  JWT_EXPIRES_IN:                    z.string(),
+  JWT_EXPIRES_IN:                    z.string().default('24h'),
   CLIENT_URL:                        z.string().url(),
   CLOUDINARY_CLOUD_NAME:             z.string().min(1),
   CLOUDINARY_API_KEY:                z.string().min(1),
@@ -374,7 +369,7 @@ If validation fails, the process must exit immediately with a descriptive error 
 | `NODE_ENV` | server | `development`, `production`, or `test` |
 | `MONGODB_URI` | server | Full MongoDB Atlas connection string |
 | `JWT_SECRET` | server | Secret key for signing JWTs (min 32 chars) |
-| `JWT_EXPIRES_IN` | server | JWT expiry string (e.g., `7d`) |
+| `JWT_EXPIRES_IN` | server | JWT expiry string (e.g., `24h`) |
 | `CLIENT_URL` | server | Allowed CORS origin; full URL including protocol |
 | `CLOUDINARY_CLOUD_NAME` | server | Cloudinary cloud name |
 | `CLOUDINARY_API_KEY` | server | Cloudinary API key |
@@ -382,10 +377,11 @@ If validation fails, the process must exit immediately with a descriptive error 
 | `MAX_LISTING_DURATION_MINUTES` | server | D6: max 180 |
 | `MIN_LISTING_DURATION_MINUTES` | server | D6: min 45 |
 | `MAX_FOOD_AGE_AT_PICKUP_MINUTES` | server | D6: max 240 |
-| `WARNING_MINUTES` | server | D6: 30 |
+| `WARNING_MINUTES` | server | D6: 30; **server-only** — client uses `warnAt` returned per listing |
 | `ADMIN_EMAIL` | server | Seed-only: admin account email |
 | `ADMIN_PASSWORD` | server | Seed-only: admin account password |
 | `NEXT_PUBLIC_API_URL` | client | Backend base URL for client-side fetches |
+| `NEXT_PUBLIC_SOCKET_URL` | client | Backend Socket.io URL |
 
 ### Rules
 
@@ -412,13 +408,13 @@ The following are hard NOTs. Doing any of these is grounds for immediate PR reje
 | N8 | Use inline styles (`style={{}}`) — Tailwind only |
 | N9 | Add a paid service or exceed any free-tier limit |
 | N10 | Add a npm package without justification in the PR |
-| N11 | Hard-delete a listing (users); skip AuditLog (admin) |
+| N11 | Hard-delete a listing (users); skip AuditLog (admin); use `isDeleted` — the correct field name is `isRemoved` |
 | N12 | Allow a user to claim their own listing |
 | N13 | Skip Zod validation on any `req.body` before the controller runs |
 | N14 | Store `WARNING` as a database field — it is derived, not stored |
-| N15 | Use `origin: '*'` in CORS configuration |
-| N16 | Lower bcrypt rounds below 12 |
-| N17 | Store JWT in `localStorage` or a non-httpOnly cookie |
+| N15 | Use `origin: '*'` in CORS configuration (Express or Socket.io) |
+| N16 | Lower bcryptjs rounds below 12; or use `bcrypt` (native) instead of `bcryptjs` |
+| N17 | Store JWT in `localStorage`, a cookie, or any persistent client-side store beyond `sessionStorage` |
 | N18 | Mix a bug fix and an unrelated refactor in the same PR |
 | N19 | Write a test that shares mutable state across test cases |
 | N20 | Claim that the system supports a scale that has not been load-tested |

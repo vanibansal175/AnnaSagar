@@ -102,7 +102,10 @@ A privileged operator account created out-of-band via a seed script; never via p
 |------|-------------|---------------------|
 | **R6** | Users register with email and password. | Signup endpoint accepts `name`, `email`, `password`; returns a signed JWT on success. Duplicate email returns HTTP 409. |
 | **R7** | Users log in with email and password. | Login endpoint validates credentials, returns a signed JWT. Invalid credentials return HTTP 401. |
-| **R8** | JWTs are used for all protected API endpoints. | Requests to protected routes without a valid Bearer token return HTTP 401. |
+| **R8** | JWTs are sent exclusively in the `Authorization: Bearer <token>` header. No cookie-based JWT storage. | Requests to protected routes without a valid `Authorization: Bearer` header return HTTP 401. |
+| **R8b** | `User.tokenVersion` is incremented on password change. Tokens with an older `tokenVersion` are rejected with HTTP 401. | The `verifyToken` middleware compares `token.tokenVersion` to `user.tokenVersion` in the DB on every request; a mismatch invalidates the token. |
+| **R8c** | JWT lifetime is 24 hours (`JWT_EXPIRES_IN=24h`). | Tokens expire 24 hours after issuance; the client must re-authenticate. |
+| **R8d** | XSS risk from non-cookie token storage is mitigated by a strict CSP header on all Vercel responses and strict output escaping. | Vercel response headers include `Content-Security-Policy: default-src 'self'; script-src 'self'`. No `dangerouslySetInnerHTML` with untrusted content. |
 | **R9** | The auth architecture must support adding Google OAuth in a future version without breaking existing sessions. | Auth logic is abstracted behind a strategy pattern or equivalent; `provider` and `providerId` fields exist on the User document with defaults for email/password. |
 | **R10** | Google OAuth is **not** implemented in MVP. | No Google OAuth routes, buttons, or SDKs are present in the MVP build. |
 | **R11** | Blocked users are denied access on every protected request (lazy invalidation). | An `isBlocked` check middleware runs on every protected route. A user blocked mid-session receives HTTP 403 on the next request. |
@@ -113,14 +116,14 @@ A privileged operator account created out-of-band via a seed script; never via p
 
 | R-ID | Description | Acceptance Criteria |
 |------|-------------|---------------------|
-| **R12** | Admin can view all listings, including soft-removed ones, in the admin dashboard. | Admin dashboard API returns all listings with a `removed` flag; public feed does not. |
-| **R13** | Admin can soft-remove any listing, supplying a mandatory reason. The reason is written to the AuditLog. | `PATCH /api/admin/listings/:id/remove` accepts `{ reason }`, sets `removed: true` on the listing, and creates an AuditLog entry with actor, reason, and timestamp. |
-| **R14** | Soft-removed listings are hidden from the public feed and from the donor's own listing view. | Public feed and donor's "my listings" queries filter out `removed: true` documents. |
+| **R12** | Admin can view all listings, including soft-removed ones, in the admin dashboard. | Admin dashboard API returns all listings including those with `isRemoved: true`; public feed filters out `isRemoved: true` documents. |
+| **R13** | Admin can soft-remove any listing, supplying a mandatory reason. The reason is written to the AuditLog. | `PATCH /api/admin/listings/:id/remove` accepts `{ reason }`, sets `isRemoved: true` on the listing, and creates an AuditLog entry with actor, reason, and timestamp. |
+| **R14** | Soft-removed listings (`isRemoved: true`) are hidden from the public feed and from the donor's own listing view. | Public feed and donor's "my listings" queries filter out `isRemoved: true` documents. |
 | **R15** | Admin can block a user. | `PATCH /api/admin/users/:id/block` sets `isBlocked: true`. Subsequent requests from that user's JWT return HTTP 403. |
 | **R16** | Admin can unblock a user. | `PATCH /api/admin/users/:id/unblock` sets `isBlocked: false`. User can make authenticated requests again. |
 | **R17** | Admin always sees the full address (house, landmark, donorContact) of any listing, regardless of claim status. | Admin listing detail endpoint always includes `house`, `landmark`, and `donorContact` fields. (See OQ9.) |
 | **R18** | AuditLog records admin actions with actor ID, action type, target ID, reason (where applicable), and timestamp. | Each admin mutation creates an AuditLog document with these fields. |
-| **R19** | Listings are never hard-deleted by any user. Admin removal is always a soft removal. | No `DELETE` route exists for listings. `removed` flag is used instead. |
+| **R19** | Listings are never hard-deleted by any user. Admin removal is always a soft removal using the `isRemoved` field. There is no `DELETE` route for listings anywhere. | No `DELETE /api/listings` or `DELETE /api/admin/listings` route exists. The `isRemoved` flag is used instead. |
 
 ---
 
@@ -161,15 +164,15 @@ A privileged operator account created out-of-band via a seed script; never via p
 
 | R-ID | Description | Acceptance Criteria |
 |------|-------------|---------------------|
-| **R39** | The public feed shows only `AVAILABLE` listings (including those in `WARNING` derived state). | Feed query filters `{ status: 'AVAILABLE', removed: false }`. |
-| **R40** | Soft-removed listings are hidden from the public feed. | Feed query includes `{ removed: false }` condition. |
-| **R41** | Pre-claim visible fields in the feed and listing card: `foodName`, `images`, `servings`, `category`, `cookedAt`, `pickupDeadline`, `donorDisplayName`, `street`, `city`, `state`, `pin`. | API response for unauthenticated or pre-claim users omits `house`, `landmark`, `donorContact`. |
-| **R42** | The feed is accessible without authentication (read-only). | `GET /api/listings` returns AVAILABLE listings to unauthenticated requests. |
+| **R39** | The feed shows only `AVAILABLE` listings that have not been soft-removed and whose `pickupDeadline` is in the future. Authentication is required to browse. | Feed query filters `{ status: 'AVAILABLE', isRemoved: false, pickupDeadline: { $gt: now } }`. Unauthenticated requests return HTTP 401. |
+| **R40** | Soft-removed listings (`isRemoved: true`) are hidden from the public feed. | Feed query includes `{ isRemoved: false }` condition. |
+| **R41** | Pre-claim visible fields in the feed and listing card: `foodName`, `images`, `servings`, `category`, `cookedAt`, `pickupDeadline`, `donorDisplayName`, `street`, `city`, `state`, `pin`. Response also includes `serverTime` and `warnAt`. | API response for authenticated pre-claim users omits `house`, `landmark`, `donorContact`. |
+| **R42** | Browsing the feed and viewing listing details require authentication (login required). User journey: Register → Login → Browse. | `GET /api/listings` and `GET /api/listings/:id` return HTTP 401 for unauthenticated requests. |
 | **R43** | The feed supports filtering by `category`. | `GET /api/listings?category=<value>` returns only matching listings. |
 | **R44** | The feed supports filtering by `city`. | `GET /api/listings?city=<value>` returns only matching listings. |
 | **R45** | The feed is paginated. | Feed endpoint accepts `page` and `limit` query parameters and returns a paginated response with `total`, `page`, `limit`, and `data`. |
-| **R46** | A Donor can view their own listings (including CLAIMED, COLLECTED, EXPIRED, CANCELLED) but not soft-removed ones. | `GET /api/listings/mine` returns all non-removed listings where `donorId === requestingUser._id`. |
-| **R47** | A Receiver can view their claim history. | `GET /api/claims/mine` returns all claims made by the requesting user, including historical statuses. |
+| **R46** | A Donor can view their own listings (all statuses, excluding `isRemoved: true`) via a dedicated endpoint. | `GET /api/listings/mine` returns all non-removed listings where `donor === requestingUser._id`; paginated. |
+| **R47** | A Receiver can view their claim history via a dedicated endpoint. | `GET /api/listings/claimed` returns all listings ever claimed by the requesting user; paginated. |
 
 ---
 
@@ -178,13 +181,13 @@ A privileged operator account created out-of-band via a seed script; never via p
 | R-ID | Description | Acceptance Criteria |
 |------|-------------|---------------------|
 | **R48** | Only authenticated `user` accounts can claim a listing. | Unauthenticated requests to the claim endpoint return HTTP 401. |
-| **R49** | Claim creation is atomic: a single `findOneAndUpdate({ _id, status: 'AVAILABLE' })` operation is used. | No two concurrent requests can both succeed in claiming the same listing; the second returns HTTP 409. |
+| **R49** | Claim creation is atomic: a single `findOneAndUpdate({ _id, status: 'AVAILABLE', isRemoved: false, pickupDeadline: { $gt: now }, donor: { $ne: claimerId } })` operation is used. Blocked users cannot claim. | No two concurrent requests can both succeed in claiming the same listing; the second returns HTTP 409. A blocked user's claim attempt returns HTTP 403. |
 | **R50** | A user cannot claim their own listing. | Claim endpoint returns HTTP 403 if `listing.donorId === requestingUser._id`. |
 | **R51** | A user cannot hold more than one active claim at a time. | Claim endpoint returns HTTP 409 if the requesting user already has an active (CLAIMED) claim. |
 | **R52** | On successful claim, the listing status transitions from `AVAILABLE` → `CLAIMED`. | Listing document `status` field equals `"CLAIMED"` after a successful claim. |
 | **R53** | The receiver must acknowledge the disclaimer on every claim (see R37). | Each individual claim request requires disclaimer acknowledgement; a previous acknowledgement does not carry over. |
-| **R54** | Post-claim, the receiver gains access to `house`, `landmark`, and `donorContact`. | Listing detail endpoint includes these fields in the response for the active claimer. |
-| **R55** | A Receiver may cancel their own active claim. | `PATCH /api/claims/:id/cancel` succeeds for the claimer; listing status reverts to `AVAILABLE`. |
+| **R54** | Post-claim, the receiver of the **current active claim** gains access to `house`, `landmark`, and `donorContact`. If the claim is subsequently cancelled, these fields are no longer returned to that receiver. | Listing detail endpoint includes sensitive fields only for the active claimer; server-side serialisation enforces this, not the UI. |
+| **R55** | A Receiver may cancel their own active claim. On cancellation, the claim is pushed to `claimHistory`, `claim` is unset, and the listing returns to `AVAILABLE` if the deadline has not passed (otherwise `EXPIRED`). | `DELETE /api/listings/:id/claim` succeeds for the active claimer; listing `status` reverts to `AVAILABLE` or `EXPIRED` accordingly. |
 | **R56** | After a receiver cancels their claim, the listing returns to `AVAILABLE` and may be re-claimed by any eligible user. | Listing `status` = `"AVAILABLE"` after receiver cancels; new claim can be created with disclaimer acknowledgement required again. (See OQ10.) |
 | **R57** | On receiver cancellation, the Donor is notified. | Socket.io notification emitted to Donor's per-user room upon receiver claim cancellation. |
 
@@ -195,10 +198,10 @@ A privileged operator account created out-of-band via a seed script; never via p
 | R-ID | Description | Acceptance Criteria |
 |------|-------------|---------------------|
 | **R58** | Five stored statuses exist: `AVAILABLE`, `CLAIMED`, `COLLECTED`, `EXPIRED`, `CANCELLED`. All are stored in UPPERCASE. | Mongoose enum validates the `status` field against these five values. |
-| **R59** | `WARNING` is a derived state, not stored: a listing with `status = AVAILABLE` and `pickupDeadline` within `WARNING_MINUTES` (30) of now. | No `WARNING` value exists in the database. Frontend/API computes and surfaces it from `status === 'AVAILABLE' && (pickupDeadline - now) ≤ WARNING_MINUTES * 60 * 1000`. |
+| **R59** | `WARNING` is a derived state, not stored: a listing with `status = AVAILABLE` and `pickupDeadline` within `WARNING_MINUTES` of now. The API returns `serverTime` and a per-listing `warnAt` field so the client can compute this without needing `WARNING_MINUTES` as a client env var. | No `WARNING` value exists in the database. Client computes `warnAt = pickupDeadline - WARNING_MINUTES * 60_000`. `WARNING_MINUTES` is a server-only env var. |
 | **R60** | A `CLAIMED` listing whose `pickupDeadline` passes without being marked `COLLECTED` automatically transitions to `EXPIRED`. | Expiry triggers on: (a) lazy check on read, (b) `node-cron` periodic sweep, (c) startup catch-up pass. |
 | **R61** | Lazy expiry: when any read operation fetches a CLAIMED listing past its deadline, the server immediately updates its status to `EXPIRED`. | A `GET /api/listings/:id` for a past-deadline CLAIMED listing returns `status: "EXPIRED"` and the DB is updated. |
-| **R62** | Cron expiry: a `node-cron` job periodically sweeps for CLAIMED listings past deadline and marks them `EXPIRED`. | A cron job runs at a configurable interval and executes `updateMany({ status: 'CLAIMED', pickupDeadline: { $lt: now } }, { $set: { status: 'EXPIRED' } })`. |
+| **R62** | Cron expiry: a `node-cron` job periodically sweeps for AVAILABLE/CLAIMED listings past deadline and marks them `EXPIRED`. Each notification (`deadline_warning`, `expired`) is sent exactly once per listing via `warningNotifiedAt` and `expiredNotifiedAt` guard fields. | A cron job runs every 5 minutes; uses `updateMany`; sets `expiredAt`; creates Notification docs only for newly transitioned listings (checked via `expiredNotifiedAt: null`). |
 | **R63** | Startup expiry: at server startup, a catch-up pass marks any CLAIMED-past-deadline listings as `EXPIRED`. | The catch-up query runs once during the server boot sequence before the HTTP server begins accepting requests (or immediately after, before routes are exercised). |
 | **R64** | Only the Donor may mark a listing `COLLECTED`. | `PATCH /api/listings/:id/collect` checks `listing.donorId === requestingUser._id`; otherwise HTTP 403. |
 | **R65** | A `COLLECTED` listing cannot transition to any other status. | Server rejects any status-change request on a `COLLECTED` listing with HTTP 409. |
@@ -210,12 +213,12 @@ A privileged operator account created out-of-band via a seed script; never via p
 
 | R-ID | Description | Acceptance Criteria |
 |------|-------------|---------------------|
-| **R67** | Notifications are delivered via Socket.io. The server emits events to a per-user room (keyed by `userId`). | Each authenticated user is joined to a room named by their user ID on socket connection. |
-| **R68** | The Donor is notified when their listing is claimed. | Server emits a `listing:claimed` event to the Donor's room upon successful claim creation. |
-| **R69** | The Receiver is notified when the Donor cancels a CLAIMED listing. | Server emits a `listing:cancelled` event to the Receiver's room upon Donor cancellation of a CLAIMED listing. |
-| **R70** | The Donor is notified when the Receiver cancels their claim. | Server emits a `claim:cancelled` event to the Donor's room upon Receiver claim cancellation. |
-| **R71** | The Receiver is notified when their claimed listing transitions to `EXPIRED`. | Server emits a `listing:expired` event to the Receiver's room when expiry is triggered for their claimed listing (by lazy, cron, or startup path). |
-| **R72** | Notifications are real-time and best-effort; no persistent notification store is required in MVP. | Missed notifications (e.g., user offline) are not re-delivered. No notification inbox table is required. |
+| **R67** | Notifications are delivered via Socket.io. The server emits events to a per-user room (keyed by `userId`) and a public `'feed'` room for non-sensitive feed events. Socket.io authenticates via the JWT in the socket handshake. | Each authenticated user is joined to a private room named by their user ID and to the `'feed'` public room on socket connection. |
+| **R68** | The Donor is notified when their listing is claimed. | Server emits a `notification:new` event to the Donor's room upon successful claim creation; `feed:changed` emitted to `'feed'` room. |
+| **R69** | The Receiver is notified when the Donor cancels a CLAIMED listing. | Server emits `notification:new` to the Receiver's room upon Donor cancellation of a CLAIMED listing; `feed:changed` emitted to `'feed'` room. |
+| **R70** | The Donor is notified when the Receiver cancels their claim. | Server emits `notification:new` to the Donor's room upon Receiver claim cancellation; `feed:changed` emitted to `'feed'` room. |
+| **R71** | The Donor and active Receiver are notified when a listing transitions to `EXPIRED`. Notification is created exactly once per listing. | Server emits `notification:new` to affected user rooms when expiry triggers; `expiredNotifiedAt` guard prevents duplicate notifications. |
+| **R72** | In-app notifications are stored in a `Notification` collection and delivered in real-time via Socket.io. A 30-second HTTP polling fallback operates when the socket is disconnected. | `Notification` documents are persisted. Client polls `GET /api/notifications` every 30 seconds when socket is not connected. |
 
 ---
 
@@ -239,8 +242,11 @@ A privileged operator account created out-of-band via a seed script; never via p
 
 ### 4.1 Security
 
-- All passwords stored as bcrypt hashes; salt rounds ≥ 10.
-- JWTs signed with a secret stored in an environment variable; short-lived (suggested: 7 days for MVP).
+- All passwords stored as bcryptjs hashes; salt rounds ≥ 12.
+- JWTs signed with a secret stored in an environment variable; `JWT_EXPIRES_IN=24h`.
+- JWTs sent exclusively in the `Authorization: Bearer <token>` header; never in cookies.
+- A strict Content Security Policy (CSP) header is configured on all Vercel responses to mitigate XSS.
+- `User.tokenVersion` enables immediate JWT invalidation on password change.
 - Rate limiting on auth endpoints to prevent brute-force attacks.
 - Zod schema validation on all incoming API payloads; server never trusts client-supplied role or computed status.
 - HTTPS enforced on both Vercel and Render deployments.
@@ -249,8 +255,8 @@ A privileged operator account created out-of-band via a seed script; never via p
 
 ### 4.2 Reliability and Availability
 
-- Three-layer expiry (lazy + cron + startup) ensures no CLAIMED listing remains active past its deadline even after Render cold starts.
-- Atomic claim operation (`findOneAndUpdate` with status filter) prevents double-claiming under concurrent load.
+- Three-layer expiry (lazy + cron + startup) ensures no CLAIMED listing remains active past its deadline even after Render cold starts. Feed queries also hard-filter `pickupDeadline > now`, so expired listings never appear even if status has not been flipped yet.
+- Atomic claim operation (`findOneAndUpdate` with full guard filter) prevents double-claiming under concurrent load.
 - Socket.io client configured with exponential back-off for reconnection after Render sleep.
 
 ### 4.3 Maintainability
@@ -259,7 +265,7 @@ A privileged operator account created out-of-band via a seed script; never via p
 - Zod schemas serve as the single source of truth for request/response shapes.
 - Mongoose models are co-located with their Zod schemas where practical.
 - AuditLog provides a trail for all admin mutations.
-- ENV-driven constants (`MAX_LISTING_DURATION_MINUTES`, `MIN_LISTING_DURATION_MINUTES`, `MAX_FOOD_AGE_AT_PICKUP_MINUTES`, `WARNING_MINUTES`) allow operational tuning without code changes.
+- ENV-driven constants (`MAX_LISTING_DURATION_MINUTES`, `MIN_LISTING_DURATION_MINUTES`, `MAX_FOOD_AGE_AT_PICKUP_MINUTES`, `WARNING_MINUTES`) allow operational tuning without code changes. `WARNING_MINUTES` is a **server-only** env var; the API exposes `serverTime` and `warnAt` per listing so the client needs no client-side copy.
 
 ### 4.4 Usability
 
@@ -278,7 +284,7 @@ The following environment variables drive system behaviour (D6):
 | `MAX_LISTING_DURATION_MINUTES` | `180` | Maximum minutes from creation to `pickupDeadline` |
 | `MIN_LISTING_DURATION_MINUTES` | `45` | Minimum minutes from creation to `pickupDeadline` |
 | `MAX_FOOD_AGE_AT_PICKUP_MINUTES` | `240` | Max age of food (from `cookedAt`) allowed at `pickupDeadline` |
-| `WARNING_MINUTES` | `30` | Minutes before deadline at which AVAILABLE listing enters WARNING derived state |
+| `WARNING_MINUTES` | `30` | Minutes before deadline at which AVAILABLE listing enters WARNING derived state (server-only; API returns `warnAt` per listing) |
 | `ADMIN_EMAIL` | _(seed only)_ | Email for seeded Admin account |
 | `ADMIN_PASSWORD` | _(seed only)_ | Password for seeded Admin account |
 
@@ -324,7 +330,7 @@ Donor registers / logs in
 
 ```
 Receiver registers / logs in
-    └─► Browses public feed (city / category filters)
+    └─► Browses feed (login required; city / category filters)
          └─► Sees listing cards:
                foodName, image, servings, category,
                cookedAt, pickupDeadline, donorDisplayName,
@@ -383,7 +389,7 @@ CLAIMED listing pickupDeadline passes without COLLECTED mark
 | `CANCELLED` | ✅ Yes | Donor (cancels own listing) | Donor explicitly cancels an AVAILABLE or CLAIMED listing | **Yes** |
 | `WARNING` ⚠️ | ❌ Derived | — | `status = AVAILABLE` **AND** `(pickupDeadline − now) ≤ WARNING_MINUTES (30 min)` | No |
 
-> **Note on WARNING:** `WARNING` is never persisted in the database. It is computed by the frontend or API layer at read time and surfaced as a UI badge or visual indicator. The underlying stored status remains `AVAILABLE`.
+> **Note on WARNING:** `WARNING` is never persisted in the database. The API returns `serverTime` and `warnAt` (= `pickupDeadline - WARNING_MINUTES * 60_000`) per listing. The client computes whether a listing is in WARNING state from these two values. `WARNING_MINUTES` is a server-only environment variable.
 
 ---
 
@@ -395,16 +401,16 @@ The MVP delivers a fully functional, end-to-end food-sharing platform for a clos
 
 | Area | Included |
 |------|----------|
-| **Auth** | Email + password signup/login; JWT; blocked-user middleware; Admin seed script |
-| **Listings** | Create, view, cancel (Donor); mark COLLECTED (Donor); browse feed; filters by city & category; pagination |
+| **Auth** | Email + password signup/login; JWT Bearer token (`JWT_EXPIRES_IN=24h`); `tokenVersion` invalidation; blocked-user middleware; Admin seed script; CSP header |
+| **Listings** | Create, view, cancel (Donor); mark COLLECTED (Donor); browse feed (login required); filters by city (`cityKey`) & category; pagination; `serverTime`+`warnAt` per response |
 | **Claiming** | Claim (atomic); cancel claim (Receiver); disclaimer acknowledgement per claim |
 | **Statuses** | All 5 stored statuses + WARNING derived state; three-layer expiry |
 | **Address privacy** | Pre/post-claim field projection; Admin always full |
 | **Images** | 1–3 images per listing; Cloudinary upload; jpg/png/webp; ≤ 5 MB; primary = index 0 |
-| **Notifications** | Real-time Socket.io events (claim, cancel, expiry); per-user rooms; best-effort |
-| **Admin** | View all listings; soft-remove with reason; block/unblock users; AuditLog; always full address |
-| **Soft-delete** | All listing removals are soft; removed listings hidden from public + donor; visible in admin dashboard |
-| **Stack** | Next.js + TypeScript + Tailwind + shadcn/ui + Framer Motion on Vercel; Express + TypeScript + Mongoose + Zod + JWT + Socket.io + node-cron on Render; MongoDB Atlas M0; Cloudinary |
+| **Notifications** | Real-time Socket.io events (per-user rooms + public `feed` room); `notification:new`, `feed:changed`; `Notification` documents persisted; 30-s polling fallback; `warningNotifiedAt`/`expiredNotifiedAt` guards prevent duplicate notifications |
+| **Admin** | View all listings (including `isRemoved: true`); soft-remove with reason (`PATCH …/remove`); block/unblock users; AuditLog; always full address |
+| **Soft-delete** | All listing removals are soft (`isRemoved: true`); removed listings hidden from public + donor; visible in admin dashboard only; no `DELETE` route for listings |
+| **Stack** | Next.js + TypeScript + Tailwind + shadcn/ui + Framer Motion on Vercel; Express + TypeScript + Mongoose + Zod + JWT + bcryptjs + Socket.io + node-cron on Render; MongoDB Atlas M0; Cloudinary |
 | **Language** | English only |
 
 ---
@@ -453,7 +459,7 @@ The following questions have an agreed default that will be used in implementati
 | **OQ1** | What format should `donorContact` take? Should it be a phone number, an email, or a free-text field? | **Free-text, max 100 characters.** No format validation beyond length. |
 | **OQ2** | When a Donor cancels a listing that is already `CLAIMED`, what happens to the receiver? | **Listing → `CANCELLED`; active claim voided; Receiver notified via Socket.io.** |
 | **OQ3** | How should expiry be handled given that Render's free tier sleeps after inactivity? | **Three-layer approach:** lazy expiry on read + `node-cron` periodic sweep + startup catch-up pass on boot. |
-| **OQ4** | What mechanism should deliver real-time notifications? | **Socket.io**, server emitting to per-user rooms keyed by `userId`. |
+| **OQ4** | What mechanism should deliver real-time notifications? | **Socket.io**, server emitting `notification:new` to per-user rooms and `feed:changed` to a public `'feed'` room. JWT passed in socket handshake for authentication. 30-second HTTP polling fallback when socket is disconnected. |
 | **OQ5** | Which image is the primary / thumbnail image for a listing? | **Index 0** in the `images` array. |
 | **OQ6** | Who can see soft-removed listings? | **Admin only**, via the admin dashboard. Hidden from all public feeds and from the Donor's own listing view. |
 | **OQ7** | How should a blocked user's existing active session be invalidated? | **Lazy middleware check:** `isBlocked` is verified on every protected request. No proactive session revocation required for MVP. |
