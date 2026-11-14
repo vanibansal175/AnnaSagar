@@ -1,3 +1,5 @@
+> NOTE: ARCHITECTURE.md is the source of truth. If this file disagrees with it, ARCHITECTURE.md wins.
+
 # AnnaSagar
 
 AnnaSagar is a community food-sharing web application that connects people who have surplus leftover cooked food with people nearby who can use it. Donors post time-boxed listings; receivers browse, claim, and collect in person — no payments, no delivery, no complexity. The platform is designed for Indian cities and campuses and enforces strict food-safety time windows to keep shared food safe.

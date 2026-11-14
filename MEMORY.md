@@ -1,3 +1,5 @@
+> NOTE: ARCHITECTURE.md is the source of truth. If this file disagrees with it, ARCHITECTURE.md wins.
+
 # AnnaSagar — Project Memory
 
 > Durable knowledge base. Not a chat log.

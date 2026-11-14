@@ -1,3 +1,5 @@
+> NOTE: ARCHITECTURE.md is the source of truth. If this file disagrees with it, ARCHITECTURE.md wins.
+
 # AnnaSagar — Master Task Tracker
 
 > This file is the single source of truth for milestone and task status.
